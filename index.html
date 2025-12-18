@@ -313,14 +313,11 @@
                 nextGameRound();
             }
         }
-
         function resetHold() {
             holdStartTime = Date.now();
             if(stabilityOverlay) stabilityOverlay.classList.add('hidden');
             if(stabilityProgress) stabilityProgress.style.strokeDashoffset = 377;
         }
-
-        // --- UI & CONTROLS ---
         function switchMode(mode) {
             currentMode = mode;
             document.getElementById('tabTranslate').className = mode === 'translate' ? 'mode-active font-bold px-2 py-1' : 'mode-inactive font-bold px-2 py-1';
@@ -336,7 +333,6 @@
                 document.getElementById('translatorUI').classList.remove('hidden');
             }
         }
-
         function toggleRecognition() {
             isRunning = !isRunning;
             const btn = document.getElementById('btnStart');
@@ -423,6 +419,5 @@ function speakText(text) {
     }
 }
     </script>
-
 </body>
 </html>
