@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SignSense - Gamified AI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-cpu"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite/dist/tf-tflite.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .glass-panel { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.2); }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        video { transform: scaleX(-1); }
+        canvas { transform: scaleX(-1); }
+        
+        /* Game Mode Animations */
+        @keyframes popIn {
+            0% { transform: scale(0); opacity: 0; }
+            80% { transform: scale(1.1); opacity: 1; }
+            100% { transform: scale(1); }
+        }
+        .animate-pop { animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+        
+        .mode-active { border-bottom: 2px solid #3b82f6; color: #3b82f6; }
+        .mode-inactive { color: #9ca3af; }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 min-h-screen text-slate-800">
+
+    <nav class="w-full p-4 text-white flex justify-between items-center bg-black/20 backdrop-blur-md fixed top-0 z-50">
+        <div class="flex items-center gap-2">
+            <i class="fa-solid fa-hands-asl-interpreting text-3xl text-blue-400"></i>
+            <h1 class="text-2xl font-bold tracking-tight">Sign<span class="text-blue-400">Sense</span></h1>
+        </div>
+        <div class="flex gap-4">
+            <button onclick="switchMode('translate')" id="tabTranslate" class="mode-active font-bold px-2 py-1 transition">Translator</button>
+            <button onclick="switchMode('game')" id="tabGame" class="mode-inactive font-bold px-2 py-1 transition">Game Mode</button>
+        </div>
+        <div class="text-sm opacity-80 font-mono">
+            AI Status: <span id="modelStatus" class="text-yellow-400">Loading...</span>
+        </div>
+    </nav>
+
+    <div class="container mx-auto px-4 pt-24 pb-12 flex flex-col lg:flex-row gap-6 h-screen">
+        
+        <div class="lg:w-2/3 w-full flex flex-col gap-4">
+            <div class="glass-panel rounded-2xl p-4 shadow-2xl flex-grow flex flex-col relative overflow-hidden bg-black">
+                <video id="videoPreview" autoplay muted class="w-full h-full object-cover rounded-xl bg-gray-900"></video>
+                <canvas id="output_canvas" class="absolute top-4 left-4 w-[calc(100%-2rem)] h-[calc(100%-2rem)] pointer-events-none rounded-xl"></canvas>
+                
+                <div id="stabilityOverlay" class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 hidden">
+                    <svg class="w-32 h-32 transform -rotate-90">
+                        <circle cx="64" cy="64" r="60" stroke="white" stroke-width="4" fill="none" opacity="0.3"></circle>
+                        <circle id="stabilityProgress" cx="64" cy="64" r="60" stroke="#00ff00" stroke-width="4" fill="none" stroke-dasharray="377" stroke-dashoffset="377" class="transition-all duration-100"></circle>
+                    </svg>
+                </div>
+
+                <div class="absolute bottom-6 left-0 w-full flex justify-center gap-4">
+                    <button id="btnStart" onclick="toggleRecognition()" class="bg-blue-600 hover:bg-blue-500 text-white px-8 py-3 rounded-full font-bold shadow-lg transition flex items-center gap-2 text-lg">
+                        <i class="fa-solid fa-power-off"></i> <span>Start Camera</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="lg:w-1/3 w-full flex flex-col gap-4">
+            <div class="glass-panel rounded-2xl p-6 shadow-2xl bg-white h-full flex flex-col relative overflow-hidden">
+                
+                <div id="translatorUI" class="flex flex-col h-full">
+                    <div class="bg-blue-50 p-4 rounded-xl border border-blue-200 mb-4 shadow-inner">
+                        <div class="flex justify-between items-center mb-2">
+                            <div class="text-xs text-blue-500 font-bold uppercase tracking-wider">Sentence Builder</div>
+                            <span class="text-[10px] bg-blue-200 text-blue-800 px-2 py-0.5 rounded font-bold">HOLD TO TYPE</span>
+                        </div>
+                        <div id="sentenceDisplay" class="text-2xl font-mono text-slate-800 min-h-[3rem] bg-white p-3 rounded border border-blue-100 mb-3 break-words shadow-sm flex items-center">
+                            <span class="text-gray-300 italic text-sm">Gestures appear here...</span>
+                        </div>
+                        <div class="grid grid-cols-3 gap-2">
+                            <button onclick="controlText('space')" class="bg-white border border-gray-200 px-2 py-2 rounded font-bold text-sm hover:bg-gray-50">Space</button>
+                            <button onclick="controlText('back')" class="bg-white border border-red-200 text-red-500 px-2 py-2 rounded font-bold text-sm hover:bg-red-50">⌫</button>
+                            <button onclick="speakSentence()" class="bg-blue-600 text-white px-2 py-2 rounded font-bold text-sm hover:bg-blue-700 shadow-md">Speak</button>
+                        </div>
+                    </div>
+
+                    <div class="flex-grow flex flex-col justify-center items-center text-center py-6">
+                        <div class="text-gray-400 text-xs font-bold uppercase tracking-wider mb-2">Detected Sign</div>
+                        <div class="text-9xl font-black text-slate-800 mb-2 tracking-tighter" id="outputText">?</div>
+                        <div class="text-green-600 font-bold text-sm bg-green-100 px-4 py-1 rounded-full" id="confidenceScore">0%</div>
+                    </div>
+                </div>
+
+                <div id="gameUI" class="hidden flex-col h-full justify-between">
+                    <div class="text-center pt-4">
+                        <h2 class="text-2xl font-black text-slate-800">Speed Run</h2>
+                        <p class="text-gray-500 text-sm">Show the signs before time runs out!</p>
+                    </div>
+
+                    <div class="flex-grow flex flex-col justify-center items-center relative">
+                        <div class="text-sm font-bold text-gray-400 uppercase mb-2">Show me letter</div>
+                        <div id="targetLetter" class="text-9xl font-black text-blue-600 mb-4 animate-pop">A</div>
+                        
+                        <div class="flex gap-4 text-center w-full px-4">
+                            <div class="w-1/2 bg-gray-50 p-3 rounded-xl border">
+                                <div class="text-xs text-gray-400 font-bold uppercase">Score</div>
+                                <div id="scoreDisplay" class="text-3xl font-black text-slate-800">0</div>
+                            </div>
+                            <div class="w-1/2 bg-gray-50 p-3 rounded-xl border">
+                                <div class="text-xs text-gray-400 font-bold uppercase">Time</div>
+                                <div id="timerDisplay" class="text-3xl font-black text-red-500">60</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button id="btnGameControl" onclick="toggleGame()" class="w-full bg-green-500 hover:bg-green-600 text-white py-4 rounded-xl font-black text-xl shadow-lg transition transform active:scale-95">
+                        START GAME
+                    </button>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+
+<script>
+        // --- VARIABLES ---
+        const videoElement = document.getElementById('videoPreview');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const stabilityProgress = document.getElementById('stabilityProgress');
+        const stabilityOverlay = document.getElementById('stabilityOverlay');
+        
+        // Mode & Logic
+        let currentMode = 'translate'; 
+        let tfliteModel = null;
+        let isRunning = false;
+        
+        // Translator State
+        let lastLabel = "";
+        let currentSentence = "";
+        let holdStartTime = 0;
+        const HOLD_DURATION = 800; 
+
+        // --- TUNED SMOOTHING VARIABLES ---
+        const bufferSize = 5; // REDUCED from 10 to 5 for faster switching
+        let predictionBuffer = [];
+
+        // Game State
+        let gameActive = false;
+        let score = 0;
+        let timeLeft = 60;
+        let targetChar = "A";
+        let gameInterval;
+        
+        const classes = [
+            "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+            "A", "B", "C", "D", "E", "F", "G", "H", "I", "J",
+            "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T",
+            "U", "V", "W", "X", "Y", "Z", "none"
+        ];
+
+        // --- SETUP ---
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+        hands.onResults(onResults);
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => { if (isRunning) await hands.send({image: videoElement}); },
+            width: 1280, height: 720
+        });
+
+        async function init() {
+            try {
+                tfliteModel = await tflite.loadTFLiteModel('./gesture_recognizer.tflite');
+                document.getElementById('modelStatus').innerText = "Online";
+                document.getElementById('modelStatus').className = "text-green-500 font-bold";
+            } catch (e) {
+                document.getElementById('modelStatus').innerText = "Error (Check File)";
+                document.getElementById('modelStatus').className = "text-red-500 font-bold";
+                console.error("Model Load Error:", e);
+            }
+        }
+        init();
+
+        // --- CORE LOOP ---
+        function onResults(results) {
+            canvasElement.width = videoElement.videoWidth;
+            canvasElement.height = videoElement.videoHeight;
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+
+                drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 4});
+                drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 1, radius: 3});
+
+                if (tfliteModel) {
+                    try {
+                        let features = [];
+                        for (let lm of landmarks) { features.push(lm.x); features.push(lm.y); }
+
+                        const input = tf.tensor([features], [1, 42]);
+                        const prediction = tfliteModel.predict(input);
+                        const scores = prediction.dataSync();
+                        const maxScore = Math.max(...scores);
+                        const rawLabel = classes[scores.indexOf(maxScore)] || "?";
+                        
+                        // --- SNAPPY SMOOTHING LOGIC ---
+                        let finalLabel = lastLabel;
+
+                        if (maxScore > 0.8 && rawLabel !== "none") {
+                            // SMART FLUSH: If the new sign is VERY different and confident, clear buffer instantly
+                            // This fixes the "Sticky" issue
+                            if (predictionBuffer.length > 0 && predictionBuffer[predictionBuffer.length-1] !== rawLabel && maxScore > 0.95) {
+                                predictionBuffer = []; 
+                            }
+
+                            predictionBuffer.push(rawLabel);
+                            if (predictionBuffer.length > bufferSize) predictionBuffer.shift();
+
+                            const counts = {};
+                            let winner = "";
+                            let maxCount = 0;
+
+                            for (const p of predictionBuffer) {
+                                counts[p] = (counts[p] || 0) + 1;
+                                if (counts[p] > maxCount) {
+                                    maxCount = counts[p];
+                                    winner = p;
+                                }
+                            }
+
+                            // Reduced threshold to 50% since buffer is smaller
+                            if (maxCount >= Math.floor(bufferSize * 0.5)) finalLabel = winner;
+                        } else {
+                            if(rawLabel === "none") predictionBuffer = [];
+                        }
+
+                        // --- UI UPDATES ---
+                        if (currentMode === 'translate') {
+                            document.getElementById('outputText').innerText = finalLabel;
+                            document.getElementById('confidenceScore').innerText = (maxScore*100).toFixed(0) + "%";
+                            
+                            // Debugging: Log to console if stuck
+                            // console.log(`Raw: ${rawLabel} (${maxScore.toFixed(2)}) | Final: ${finalLabel}`);
+
+                            handleTranslatorLogic(finalLabel);
+                        } else if (currentMode === 'game' && gameActive) {
+                            if (finalLabel !== lastLabel) handleGameLogic(finalLabel);
+                        }
+
+                        input.dispose(); prediction.dispose();
+                    } catch (err) {
+                        console.error("Prediction Error:", err);
+                    }
+                }
+            } else {
+                resetHold();
+                predictionBuffer = [];
+            }
+            canvasCtx.restore();
+        }
+
+        // --- LOGIC HANDLERS ---
+        function handleTranslatorLogic(label) {
+            // Only lock on if the label is NOT empty and matches the previous smoothed label
+            if (label !== "" && label === lastLabel) {
+                const holdTime = Date.now() - holdStartTime;
+                const progress = Math.min(holdTime / HOLD_DURATION, 1);
+                
+                stabilityOverlay.classList.remove('hidden');
+                stabilityProgress.style.strokeDashoffset = 377 - (377 * progress);
+
+                if (holdTime > HOLD_DURATION) {
+                    currentSentence += label;
+                    document.getElementById('sentenceDisplay').innerText = currentSentence;
+                    speakText(label);
+                    
+                    const display = document.getElementById('sentenceDisplay');
+                    display.classList.add('bg-green-100');
+                    setTimeout(() => display.classList.remove('bg-green-100'), 200);
+                    
+                    // HARD RESET after typing
+                    resetHold();
+                    predictionBuffer = []; // Clear buffer so we don't type "A" again immediately
+                    lastLabel = "";        // Force user to re-sign or change sign
+                }
+            } else {
+                // If label changed, reset the timer
+                lastLabel = label;
+                resetHold();
+            }
+        }
+
+        function handleGameLogic(label) {
+            if (label === targetChar) {
+                score += 10;
+                document.getElementById('scoreDisplay').innerText = score;
+                confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+                speakText("Correct!");
+                nextGameRound();
+            }
+        }
+
+        function resetHold() {
+            holdStartTime = Date.now();
+            if(stabilityOverlay) stabilityOverlay.classList.add('hidden');
+            if(stabilityProgress) stabilityProgress.style.strokeDashoffset = 377;
+        }
+
+        // --- UI & CONTROLS ---
+        function switchMode(mode) {
+            currentMode = mode;
+            document.getElementById('tabTranslate').className = mode === 'translate' ? 'mode-active font-bold px-2 py-1' : 'mode-inactive font-bold px-2 py-1';
+            document.getElementById('tabGame').className = mode === 'game' ? 'mode-active font-bold px-2 py-1' : 'mode-inactive font-bold px-2 py-1';
+            
+            if (mode === 'game') {
+                document.getElementById('translatorUI').classList.add('hidden');
+                document.getElementById('gameUI').classList.remove('hidden');
+                document.getElementById('gameUI').classList.add('flex');
+            } else {
+                document.getElementById('gameUI').classList.add('hidden');
+                document.getElementById('gameUI').classList.remove('flex');
+                document.getElementById('translatorUI').classList.remove('hidden');
+            }
+        }
+
+        function toggleRecognition() {
+            isRunning = !isRunning;
+            const btn = document.getElementById('btnStart');
+            if (isRunning) {
+                btn.innerHTML = '<i class="fa-solid fa-stop"></i> Stop';
+                btn.classList.replace('bg-blue-600', 'bg-red-500');
+                camera.start();
+                speakText(""); 
+            } else {
+                btn.innerHTML = '<i class="fa-solid fa-power-off"></i> Start Camera';
+                btn.classList.replace('bg-red-500', 'bg-blue-600');
+                canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            }
+        }
+
+        function toggleGame() {
+            if (gameActive) {
+                endGame();
+            } else {
+                startGame();
+            }
+        }
+
+        function startGame() {
+            gameActive = true;
+            score = 0;
+            timeLeft = 60;
+            document.getElementById('scoreDisplay').innerText = score;
+            document.getElementById('btnGameControl').innerText = "STOP GAME";
+            document.getElementById('btnGameControl').className = "w-full bg-red-500 hover:bg-red-600 text-white py-4 rounded-xl font-black text-xl shadow-lg";
+            
+            gameInterval = setInterval(() => {
+                timeLeft--;
+                document.getElementById('timerDisplay').innerText = timeLeft;
+                if (timeLeft <= 0) endGame();
+            }, 1000);
+
+            nextGameRound();
+        }
+
+        function endGame() {
+            gameActive = false;
+            clearInterval(gameInterval);
+            document.getElementById('btnGameControl').innerText = "PLAY AGAIN";
+            document.getElementById('btnGameControl').className = "w-full bg-green-500 hover:bg-green-600 text-white py-4 rounded-xl font-black text-xl shadow-lg";
+            speakText("Time's up! Score " + score);
+        }
+
+        function nextGameRound() {
+            const letters = classes.slice(10, 36); 
+            targetChar = letters[Math.floor(Math.random() * letters.length)];
+            const targetEl = document.getElementById('targetLetter');
+            targetEl.innerText = targetChar;
+            targetEl.classList.remove('animate-pop');
+            void targetEl.offsetWidth; 
+            targetEl.classList.add('animate-pop');
+        }
+
+        function controlText(action) {
+            if (action === 'space') currentSentence += " ";
+            if (action === 'back') currentSentence = currentSentence.slice(0, -1);
+            document.getElementById('sentenceDisplay').innerText = currentSentence || "Gestures appear here...";
+        }
+
+        function speakSentence() {
+            if (currentSentence) speakText(currentSentence.toLowerCase());
+        }
+
+        // NEW: Audio Cooldown to prevent browser freeze
+let lastSpeakTime = 0;
+
+function speakText(text) {
+    if (!text) return;
+    const now = Date.now();
+    // Only speak if 500ms has passed since last word
+    if (now - lastSpeakTime < 500) return; 
+    
+    if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel(); // Kill previous audio instantly
+        const u = new SpeechSynthesisUtterance(text);
+        u.rate = 1.0; // Normal speed
+        window.speechSynthesis.speak(u);
+        lastSpeakTime = now;
+    }
+}
+    </script>
+
+</body>
+</html>
